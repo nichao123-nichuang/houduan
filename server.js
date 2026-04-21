@@ -426,6 +426,11 @@ app.post('/api/redeem', async (req, res) => {
     return res.status(404).json({ error: '无效的兑换码，请检查是否输入正确' });
   }
 
+  // 检查是否已被激活（一次性兑换码）
+  if (codeData.activatedBy) {
+    return res.status(410).json({ error: '此兑换码已被使用，无法重复激活' });
+  }
+
   // 检查是否已用完
   if (codeData.totalTurns > 0 && codeData.usedTurns >= codeData.totalTurns) {
     return res.status(410).json({ error: '此兑换码已用完', remaining: 0 });
