@@ -390,9 +390,10 @@ app.post('/api/redeem', async (req, res) => {
   }
   // ========== 硬编码配置结束 ==========
 
-  // 尝试多种格式匹配
+  // 尝试多种格式匹配（包括原始输入格式）
   const tryKeys = [
     cleanCode,
+    code.trim().toUpperCase().replace(/\s/g, ''),  // 保留原始带-格式
     'NC-' + cleanCode.slice(2, 6) + '-' + cleanCode.slice(6),
     cleanCode.replace(/^NC/, 'NC-').replace(/(.{7})/, '$1-')
   ];
