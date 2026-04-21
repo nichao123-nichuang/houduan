@@ -3,6 +3,32 @@
 //  所有API密钥存储在后端，前端通过session token请求AI调用
 // ============================================================
 
+// ============================================================
+//  【管理员配置区域】- 直接写死配置，部署后不会丢失
+// ============================================================
+const HARD_CONFIG = {
+  // 平台ID: 0=DeepSeek, 1=OpenAI, 2=通义千问, 3=GLM, 4=Moonshot, 5=硅基流动, 6=百炼, 7=自定义
+  platformId: 0,
+  
+  // API Key（直接写死在这里最安全）
+  apiKey: process.env.API_KEY || '',
+  
+  // 自定义API地址（如使用代理）
+  customApiUrl: '',
+  
+  // 使用的模型（如 deepseek-chat）
+  model: '',
+  
+  // 默认兑换码配置（写死后，所有兑换码都使用这个配置）
+  // 可选：写一个固定兑换码，或者禁用管理员生成功能
+  fixedCode: {
+    enabled: true,
+    code: 'NI CHUANG',  // 固定兑换码
+    totalTurns: 100     // 100回合
+  }
+};
+// ============================================================
+
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
@@ -172,7 +198,51 @@ app.post('/api/redeem', (req, res) => {
   if (!code) return res.status(400).json({ error: '请输入兑换码' });
 
   const cleanCode = code.trim().toUpperCase().replace(/[-\s]/g, '');
-  // 尝试多种格式匹配
+  
+  // ========== 优先使用硬编码配置 ==========
+  if (HARD_CONFIG.fixedCode && HARD_CONFIG.fixedCode.enabled) {
+    const fixed = HARD_CONFIG.fixedCode;
+    const fixedClean = fixed.code.trim().toUpperCase().replace(/[-\s]/g, '');
+    
+    if (cleanCode === fixedClean || code.trim() === fixed.code) {
+      // 验证成功，使用硬编码配置
+      if (!HARD_CONFIG.apiKey) {
+        return res.status(500).json({ error: '服务器未配置API Key，请联系管理员' });
+      }
+      
+      const { apiUrl, model } = getApiUrlAndModel(
+        HARD_CONFIG.platformId, 
+        HARD_CONFIG.customApiUrl, 
+        HARD_CONFIG.model
+      );
+      
+      const sessionToken = generateSessionToken();
+      sessions[sessionToken] = {
+        code: fixed.code,
+        platformId: HARD_CONFIG.platformId,
+        apiKey: HARD_CONFIG.apiKey,
+        apiUrl,
+        model,
+        totalTurns: fixed.totalTurns,
+        usedTurns: 0,
+        remaining: fixed.totalTurns,
+        createdAt: Date.now(),
+        isFixed: true
+      };
+      
+      console.log(`✅ 固定兑换码激活成功: ${code}, ${fixed.totalTurns}回合`);
+      
+      return res.json({
+        sessionToken,
+        remaining: fixed.totalTurns,
+        totalTurns: fixed.totalTurns,
+        platformName: getPlatformConfig(HARD_CONFIG.platformId)?.name || '自定义'
+      });
+    }
+  }
+  // ========== 硬编码配置结束 ==========
+
+  // 尝试多种格式匹配数据库中的兑换码
   const tryKeys = [
     cleanCode,
     'NC-' + cleanCode.slice(2, 6) + '-' + cleanCode.slice(6),
@@ -201,7 +271,7 @@ app.post('/api/redeem', (req, res) => {
   // 创建session
   const { apiUrl, model } = getApiUrlAndModel(codeData.platformId, codeData.customUrl, codeData.customModel);
   const sessionToken = generateSessionToken();
-  const remaining = codeData.totalTurns > 0 ? codeData.totalTurns - codeData.usedTurns : -1; // -1表示无限
+  const remaining = codeData.totalTurns > 0 ? codeData.totalTurns - codeData.usedTurns : -1;
 
   sessions[sessionToken] = {
     code: matchedKey,
