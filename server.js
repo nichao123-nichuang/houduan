@@ -24,7 +24,7 @@ const HARD_CONFIG = {
   fixedCode: {
     enabled: true,
     code: 'NI CHUANG',  // 固定兑换码
-    totalTurns: 100     // 100回合
+    totalTurns: 100     // 10回合
   }
 };
 // ============================================================
@@ -34,9 +34,53 @@ const cors = require('cors');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { Pool } = require('pg');
 
 const app = express();
 const PORT = process.env.PORT || 3210;
+
+// ============================================================
+//  PostgreSQL 数据库连接
+// ============================================================
+const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://postgres:iuudUMlJxAIxTImmXpOoAnbjODWAaOiQ@postgres.railway.internal:5432/railway';
+
+let pool;
+try {
+  pool = new Pool({ connectionString: DATABASE_URL });
+  console.log('✅ PostgreSQL 连接池已创建');
+} catch (e) {
+  console.error('❌ PostgreSQL 连接失败:', e.message);
+}
+
+// 初始化数据库表
+async function initDatabase() {
+  if (!pool) return false;
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS redeem_codes (
+        code VARCHAR(20) PRIMARY KEY,
+        platform_id INTEGER DEFAULT 0,
+        api_key TEXT,
+        custom_url TEXT,
+        custom_model TEXT,
+        total_turns INTEGER DEFAULT 0,
+        used_turns INTEGER DEFAULT 0,
+        activated_by TEXT,
+        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT
+      )
+    `);
+    console.log('✅ 兑换码表初始化完成');
+    return true;
+  } catch (e) {
+    console.error('❌ 数据库初始化失败:', e.message);
+    return false;
+  }
+}
+
+// 异步初始化（不阻塞启动）
+initDatabase().then(ok => {
+  if (ok) console.log('✅ 数据库就绪');
+});
 
 // 中间件 - CORS 支持跨域访问
 const corsOptions = {
@@ -111,8 +155,105 @@ let adminConfig = loadJSON('admin.json', {
   defaultCustomModel: ''
 });
 
-// 兑换码数据库
+// 兑换码数据库（文件方式保留作为 fallback）
 let redeemCodes = loadJSON('redeem_codes.json', {});  // { code: { platformId, apiKey, customUrl, customModel, totalTurns, usedTurns, activatedBy, createdAt } }
+
+// 数据库操作辅助函数
+async function getCodeFromDB(code) {
+  if (!pool) return null;
+  try {
+    const result = await pool.query('SELECT * FROM redeem_codes WHERE code = $1', [code]);
+    if (result.rows.length === 0) return null;
+    const row = result.rows[0];
+    return {
+      platformId: row.platform_id,
+      apiKey: row.api_key,
+      customUrl: row.custom_url,
+      customModel: row.custom_model,
+      totalTurns: row.total_turns,
+      usedTurns: row.used_turns,
+      activatedBy: row.activated_by,
+      createdAt: row.created_at
+    };
+  } catch (e) {
+    console.error('查询兑换码失败:', e.message);
+    return null;
+  }
+}
+
+async function getAllCodesFromDB() {
+  if (!pool) return {};
+  try {
+    const result = await pool.query('SELECT * FROM redeem_codes ORDER BY created_at DESC');
+    const codes = {};
+    for (const row of result.rows) {
+      codes[row.code] = {
+        platformId: row.platform_id,
+        apiKey: row.api_key,
+        customUrl: row.custom_url,
+        customModel: row.custom_model,
+        totalTurns: row.total_turns,
+        usedTurns: row.used_turns,
+        activatedBy: row.activated_by,
+        createdAt: row.created_at
+      };
+    }
+    return codes;
+  } catch (e) {
+    console.error('查询所有兑换码失败:', e.message);
+    return {};
+  }
+}
+
+async function saveCodeToDB(codeData) {
+  if (!pool) return false;
+  try {
+    await pool.query(`
+      INSERT INTO redeem_codes (code, platform_id, api_key, custom_url, custom_model, total_turns, used_turns, activated_by, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      ON CONFLICT (code) DO UPDATE SET
+        platform_id = $2, api_key = $3, custom_url = $4, custom_model = $5,
+        total_turns = $6, used_turns = $7, activated_by = $8
+    `, [codeData.code, codeData.platformId, codeData.apiKey, codeData.customUrl, codeData.customModel, codeData.totalTurns, codeData.usedTurns, codeData.activatedBy, codeData.createdAt]);
+    return true;
+  } catch (e) {
+    console.error('保存兑换码失败:', e.message);
+    return false;
+  }
+}
+
+async function updateCodeUsedInDB(code, usedTurns, activatedBy) {
+  if (!pool) return false;
+  try {
+    await pool.query('UPDATE redeem_codes SET used_turns = $1, activated_by = $2 WHERE code = $3', [usedTurns, activatedBy, code]);
+    return true;
+  } catch (e) {
+    console.error('更新兑换码失败:', e.message);
+    return false;
+  }
+}
+
+async function deleteCodeFromDB(code) {
+  if (!pool) return false;
+  try {
+    await pool.query('DELETE FROM redeem_codes WHERE code = $1', [code]);
+    return true;
+  } catch (e) {
+    console.error('删除兑换码失败:', e.message);
+    return false;
+  }
+}
+
+async function clearAllCodesFromDB() {
+  if (!pool) return false;
+  try {
+    await pool.query('DELETE FROM redeem_codes');
+    return true;
+  } catch (e) {
+    console.error('清空兑换码失败:', e.message);
+    return false;
+  }
+}
 
 // Session存储（内存中，重启后需重新兑换）
 let sessions = {};  // { sessionToken: { code, platformId, apiUrl, model, remaining, totalTurns, usedTurns, createdAt } }
@@ -134,8 +275,15 @@ if (process.env.API_URL) {
 }
 
 // 健康检查端点
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', version: '1.0.0', codes: Object.keys(redeemCodes).length });
+app.get('/api/health', async (req, res) => {
+  const dbCodes = await getAllCodesFromDB();
+  res.json({ 
+    status: 'ok', 
+    version: '1.0.0', 
+    codes: Object.keys(redeemCodes).length,
+    dbCodes: Object.keys(dbCodes).length,
+    dbConnected: !!pool
+  });
 });
 
 // ============================================================
@@ -192,8 +340,8 @@ setInterval(cleanExpiredSessions, 30 * 60 * 1000);
 //  API 路由 - 玩家端
 // ============================================================
 
-// 1. 兑换码激活 → 返回session token
-app.post('/api/redeem', (req, res) => {
+// 1. 兑换码激活 → 返回session token（支持数据库）
+app.post('/api/redeem', async (req, res) => {
   const { code } = req.body;
   if (!code) return res.status(400).json({ error: '请输入兑换码' });
 
@@ -242,7 +390,7 @@ app.post('/api/redeem', (req, res) => {
   }
   // ========== 硬编码配置结束 ==========
 
-  // 尝试多种格式匹配数据库中的兑换码
+  // 尝试多种格式匹配
   const tryKeys = [
     cleanCode,
     'NC-' + cleanCode.slice(2, 6) + '-' + cleanCode.slice(6),
@@ -251,11 +399,25 @@ app.post('/api/redeem', (req, res) => {
 
   let codeData = null;
   let matchedKey = null;
+
+  // 优先从数据库查询
   for (const key of tryKeys) {
-    if (redeemCodes[key]) {
-      codeData = redeemCodes[key];
+    const dbCode = await getCodeFromDB(key);
+    if (dbCode) {
+      codeData = dbCode;
       matchedKey = key;
       break;
+    }
+  }
+
+  // 如果数据库没有，fallback 到文件
+  if (!codeData) {
+    for (const key of tryKeys) {
+      if (redeemCodes[key]) {
+        codeData = redeemCodes[key];
+        matchedKey = key;
+        break;
+      }
     }
   }
 
@@ -285,8 +447,10 @@ app.post('/api/redeem', (req, res) => {
     createdAt: Date.now()
   };
 
-  // 标记兑换码已被激活
-  redeemCodes[matchedKey].activatedBy = true;
+  // 标记兑换码已被激活（同时更新数据库和文件）
+  codeData.activatedBy = true;
+  await updateCodeInDB(matchedKey, codeData);
+  redeemCodes[matchedKey] = codeData;
   saveJSON('redeem_codes.json', redeemCodes);
 
   res.json({
@@ -297,6 +461,20 @@ app.post('/api/redeem', (req, res) => {
     platformName: getPlatformConfig(codeData.platformId)?.name || '自定义'
   });
 });
+
+// 辅助函数：更新数据库中的兑换码
+async function updateCodeInDB(code, codeData) {
+  if (!pool) return false;
+  try {
+    await pool.query(`
+      UPDATE redeem_codes SET used_turns = $1, activated_by = $2 WHERE code = $3
+    `, [codeData.usedTurns, codeData.activatedBy, code]);
+    return true;
+  } catch (e) {
+    console.error('更新兑换码失败:', e.message);
+    return false;
+  }
+}
 
 // 2. 查询session状态
 app.get('/api/session/:token', (req, res) => {
@@ -486,8 +664,8 @@ app.post('/api/admin/config', requireAdmin, (req, res) => {
   res.json({ success: true });
 });
 
-// 批量生成兑换码
-app.post('/api/admin/generate-codes', requireAdmin, (req, res) => {
+// 批量生成兑换码（同时保存到数据库）
+app.post('/api/admin/generate-codes', requireAdmin, async (req, res) => {
   const { platformId, apiKey, customUrl, customModel, turns, count } = req.body;
 
   if (!apiKey && !adminConfig.defaultApiKey) {
@@ -501,15 +679,20 @@ app.post('/api/admin/generate-codes', requireAdmin, (req, res) => {
 
   const total = Math.min(count || 1, 500);
   const codes = [];
+  const now = Date.now();
+
+  // 先获取所有现有兑换码（从数据库）
+  const existingCodes = await getAllCodesFromDB();
 
   for (let i = 0; i < total; i++) {
     let shortCode;
     // 确保不重复
     do {
       shortCode = generateShortCode();
-    } while (redeemCodes[shortCode]);
+    } while (existingCodes[shortCode] || redeemCodes[shortCode]);
 
-    redeemCodes[shortCode] = {
+    const codeData = {
+      code: shortCode,
       platformId: pid,
       apiKey: key,
       customUrl: pid === 9 ? (customUrl || '') : '',
@@ -517,8 +700,14 @@ app.post('/api/admin/generate-codes', requireAdmin, (req, res) => {
       totalTurns: turns,
       usedTurns: 0,
       activatedBy: null,
-      createdAt: Date.now()
+      createdAt: now
     };
+
+    // 保存到内存和文件
+    redeemCodes[shortCode] = codeData;
+    existingCodes[shortCode] = codeData;
+    // 保存到数据库
+    await saveCodeToDB(codeData);
 
     codes.push(shortCode);
   }
@@ -528,12 +717,20 @@ app.post('/api/admin/generate-codes', requireAdmin, (req, res) => {
   saveJSON('admin.json', adminConfig);
   saveJSON('redeem_codes.json', redeemCodes);
 
+  console.log(`✅ 生成 ${codes.length} 个兑换码，存入数据库`);
   res.json({ success: true, codes, count: codes.length });
 });
 
-// 获取兑换码列表
-app.get('/api/admin/codes', requireAdmin, (req, res) => {
-  const list = Object.entries(redeemCodes).map(([code, data]) => ({
+// 获取兑换码列表（优先从数据库读取）
+app.get('/api/admin/codes', requireAdmin, async (req, res) => {
+  // 从数据库获取
+  const dbCodes = await getAllCodesFromDB();
+  // 合并文件中的（如果有）
+  for (const [k, v] of Object.entries(redeemCodes)) {
+    if (!dbCodes[k]) dbCodes[k] = v;
+  }
+  
+  const list = Object.entries(dbCodes).map(([code, data]) => ({
     code,
     platformId: data.platformId,
     platformName: getPlatformConfig(data.platformId)?.name || '自定义',
@@ -549,8 +746,8 @@ app.get('/api/admin/codes', requireAdmin, (req, res) => {
   res.json(list);
 });
 
-// 删除兑换码
-app.delete('/api/admin/codes/:code', requireAdmin, (req, res) => {
+// 删除兑换码（同时删除数据库）
+app.delete('/api/admin/codes/:code', requireAdmin, async (req, res) => {
   const code = req.params.code.toUpperCase().replace(/[-\s]/g, '');
   // 尝试带前缀格式
   const tryKeys = [
@@ -562,8 +759,9 @@ app.delete('/api/admin/codes/:code', requireAdmin, (req, res) => {
     if (redeemCodes[key]) {
       delete redeemCodes[key];
       deleted = true;
-      break;
     }
+    // 从数据库删除
+    await deleteCodeFromDB(key);
   }
   if (deleted) {
     saveJSON('redeem_codes.json', redeemCodes);
@@ -573,10 +771,11 @@ app.delete('/api/admin/codes/:code', requireAdmin, (req, res) => {
   }
 });
 
-// 清空所有兑换码
-app.post('/api/admin/clear-codes', requireAdmin, (req, res) => {
+// 清空所有兑换码（同时清空数据库）
+app.post('/api/admin/clear-codes', requireAdmin, async (req, res) => {
   redeemCodes = {};
   saveJSON('redeem_codes.json', redeemCodes);
+  await clearAllCodesFromDB();
   res.json({ success: true });
 });
 
@@ -590,10 +789,16 @@ app.post('/api/admin/change-password', requireAdmin, (req, res) => {
   res.json({ success: true });
 });
 
-// 获取统计信息
-app.get('/api/admin/stats', requireAdmin, (req, res) => {
-  const totalCodes = Object.keys(redeemCodes).length;
-  const usedCodes = Object.values(redeemCodes).filter(c => c.usedTurns > 0).length;
+// 获取统计信息（优先从数据库读取）
+app.get('/api/admin/stats', requireAdmin, async (req, res) => {
+  const dbCodes = await getAllCodesFromDB();
+  // 合并文件中的
+  for (const [k, v] of Object.entries(redeemCodes)) {
+    if (!dbCodes[k]) dbCodes[k] = v;
+  }
+  
+  const totalCodes = Object.keys(dbCodes).length;
+  const usedCodes = Object.values(dbCodes).filter(c => c.usedTurns > 0).length;
   const activeSessions = Object.keys(sessions).length;
 
   res.json({ totalCodes, usedCodes, activeSessions });
