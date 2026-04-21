@@ -24,7 +24,7 @@ const HARD_CONFIG = {
   fixedCode: {
     enabled: true,
     code: 'NI CHUANG',  // 固定兑换码
-    totalTurns: 100     // 10回合
+    totalTurns: 100     // 100回合
   }
 };
 // ============================================================
