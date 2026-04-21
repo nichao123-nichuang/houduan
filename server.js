@@ -64,7 +64,7 @@ function saveJSON(filename, data) {
   } catch (e) { console.error(`Save ${filename} error:`, e.message); }
 }
 
-// 管理员配置（API密钥存储在这里）
+// 管理员配置（优先从环境变量读取API Key）
 let adminConfig = loadJSON('admin.json', {
   password: 'nichuang_admin_2024',  // 可通过管理面板修改
   platforms: [
@@ -93,6 +93,19 @@ let sessions = {};  // { sessionToken: { code, platformId, apiUrl, model, remain
 
 // 管理员session（持久化到文件，重启不丢失）
 let adminSession = loadJSON('admin_session.json', null);
+
+// 优先从环境变量读取 API Key（Railway 部署时使用）
+if (process.env.API_KEY) {
+  adminConfig.defaultApiKey = process.env.API_KEY;
+  console.log('✅ 使用环境变量 API_KEY');
+}
+if (process.env.DEFAULT_PLATFORM) {
+  adminConfig.defaultPlatform = parseInt(process.env.DEFAULT_PLATFORM) || 0;
+}
+if (process.env.API_URL) {
+  // 自定义 API URL（可选）
+  console.log('✅ 使用自定义 API URL:', process.env.API_URL);
+}
 
 // 健康检查端点
 app.get('/api/health', (req, res) => {
