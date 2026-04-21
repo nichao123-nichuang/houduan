@@ -56,6 +56,7 @@ try {
 async function initDatabase() {
   if (!pool) return false;
   try {
+    // 兑换码表
     await pool.query(`
       CREATE TABLE IF NOT EXISTS redeem_codes (
         code VARCHAR(20) PRIMARY KEY,
@@ -70,6 +71,21 @@ async function initDatabase() {
       )
     `);
     console.log('✅ 兑换码表初始化完成');
+
+    // 头像存储表
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS avatars (
+        id SERIAL PRIMARY KEY,
+        owner_id VARCHAR(50) NOT NULL,  -- 用户标识（session token或设备ID）
+        avatar_type VARCHAR(20) NOT NULL,  -- 类型：npc/character/script
+        target_name VARCHAR(100) NOT NULL,  -- 对应名称（NPC名/角色ID/剧本ID）
+        image_data TEXT NOT NULL,  -- Base64图片数据
+        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT,
+        UNIQUE(owner_id, avatar_type, target_name)
+      )
+    `);
+    console.log('✅ 头像表初始化完成');
+
     return true;
   } catch (e) {
     console.error('❌ 数据库初始化失败:', e.message);
@@ -277,13 +293,131 @@ if (process.env.API_URL) {
 // 健康检查端点
 app.get('/api/health', async (req, res) => {
   const dbCodes = await getAllCodesFromDB();
-  res.json({ 
-    status: 'ok', 
-    version: '1.0.0', 
+  res.json({
+    status: 'ok',
+    version: '1.0.0',
     codes: Object.keys(redeemCodes).length,
     dbCodes: Object.keys(dbCodes).length,
     dbConnected: !!pool
   });
+});
+
+// ============================================================
+//  头像存储 API
+// ============================================================
+
+// 获取用户ID（优先用session token，没有则用设备ID）
+function getOwnerId(req) {
+  return req.headers['x-session-token'] || req.headers['x-device-id'] || 'anonymous';
+}
+
+// 保存头像
+app.post('/api/avatar', async (req, res) => {
+  const { avatarType, targetName, imageData } = req.body;
+
+  if (!avatarType || !targetName || !imageData) {
+    return res.status(400).json({ error: '缺少必要参数' });
+  }
+
+  const ownerId = getOwnerId(req);
+
+  try {
+    if (!pool) {
+      return res.status(503).json({ error: '数据库未连接' });
+    }
+
+    await pool.query(`
+      INSERT INTO avatars (owner_id, avatar_type, target_name, image_data)
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (owner_id, avatar_type, target_name)
+      DO UPDATE SET image_data = $4, created_at = EXTRACT(EPOCH FROM NOW())::BIGINT
+    `, [ownerId, avatarType, targetName, imageData]);
+
+    res.json({ success: true, message: '头像保存成功' });
+  } catch (e) {
+    console.error('保存头像失败:', e.message);
+    res.status(500).json({ error: '保存失败: ' + e.message });
+  }
+});
+
+// 获取头像
+app.get('/api/avatar', async (req, res) => {
+  const { avatarType, targetName } = req.query;
+
+  if (!avatarType || !targetName) {
+    return res.status(400).json({ error: '缺少必要参数' });
+  }
+
+  const ownerId = getOwnerId(req);
+
+  try {
+    if (!pool) {
+      return res.status(503).json({ error: '数据库未连接' });
+    }
+
+    const result = await pool.query(`
+      SELECT image_data FROM avatars
+      WHERE owner_id = $1 AND avatar_type = $2 AND target_name = $3
+    `, [ownerId, avatarType, targetName]);
+
+    if (result.rows.length > 0) {
+      res.json({ success: true, imageData: result.rows[0].image_data });
+    } else {
+      res.json({ success: false, error: '头像不存在' });
+    }
+  } catch (e) {
+    console.error('获取头像失败:', e.message);
+    res.status(500).json({ error: '获取失败: ' + e.message });
+  }
+});
+
+// 获取用户所有头像列表
+app.get('/api/avatar/list', async (req, res) => {
+  const ownerId = getOwnerId(req);
+
+  try {
+    if (!pool) {
+      return res.status(503).json({ error: '数据库未连接' });
+    }
+
+    const result = await pool.query(`
+      SELECT avatar_type, target_name, created_at FROM avatars
+      WHERE owner_id = $1
+      ORDER BY created_at DESC
+    `, [ownerId]);
+
+    res.json({ success: true, avatars: result.rows });
+  } catch (e) {
+    console.error('获取头像列表失败:', e.message);
+    res.status(500).json({ error: '获取失败: ' + e.message });
+  }
+});
+
+// 删除头像
+app.delete('/api/avatar', async (req, res) => {
+  const { avatarType, targetName } = req.body;
+
+  if (!avatarType || !targetName) {
+    return res.status(400).json({ error: '缺少必要参数' });
+  }
+
+  const ownerId = getOwnerId(req);
+
+  try {
+    if (!pool) {
+      return res.status(503).json({ error: '数据库未连接' });
+    }
+
+    await pool.query(`
+      DELETE FROM avatars
+      WHERE owner_id = $1 AND avatar_type = $2 AND target_name = $3
+    `, [ownerId, avatarType, targetName]);
+
+    res.json({ success: true, message: '头像已删除' });
+  } catch (e) {
+    console.error('删除头像失败:', e.message);
+    res.status(500).json({ error: '删除失败: ' + e.message });
+  }
 });
 
 // ============================================================
