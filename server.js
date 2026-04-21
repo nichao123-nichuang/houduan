@@ -12,12 +12,21 @@ const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3210;
 
-// 中间件
-app.use(cors());
+// 中间件 - CORS 支持跨域访问
+const corsOptions = {
+  origin: process.env.ALLOWED_ORIGIN || true, // 默认允许所有域名，或指定环境变量
+  credentials: true
+};
+app.use(cors(corsOptions));
 app.use(express.json({ limit: '1mb' }));
 
-// 静态文件服务 - 前端HTML
-app.use(express.static(path.join(__dirname, '..', 'avatars'), {
+// 静态文件服务 - 前端HTML（兼容多种目录结构）
+let staticPath = path.join(__dirname, 'avatars');
+if (!fs.existsSync(staticPath)) staticPath = path.join(__dirname, '..', 'avatars');
+if (!fs.existsSync(staticPath)) staticPath = __dirname; // 根目录
+console.log('静态文件路径:', staticPath);
+
+app.use(express.static(staticPath, {
   setHeaders: (res, filePath) => {
     if (filePath.endsWith('.html')) {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -25,11 +34,20 @@ app.use(express.static(path.join(__dirname, '..', 'avatars'), {
   }
 }));
 
+// 根路径重定向到游戏页面
+app.get('/', (req, res) => {
+  res.redirect('/nichuang.html');
+});
+
 // ============================================================
 //  数据存储（JSON文件持久化）
 // ============================================================
-const DATA_DIR = path.join(__dirname, 'data');
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+// 数据存储目录（兼容多种部署结构）
+let DATA_DIR = path.join(__dirname, 'data');
+if (!fs.existsSync(DATA_DIR)) DATA_DIR = path.join(__dirname, '..', 'data');
+if (!fs.existsSync(DATA_DIR)) DATA_DIR = path.join(__dirname, 'data');
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR = __dirname, { recursive: true });
+console.log('数据存储路径:', DATA_DIR);
 
 function loadJSON(filename, defaultValue) {
   const fp = path.join(DATA_DIR, filename);
