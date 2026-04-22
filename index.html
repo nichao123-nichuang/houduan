@@ -4158,18 +4158,6 @@ function getCharAvatar(ch){
 
   return localAvatar;
 }
-          LS.set('myChars', myChars);
-        } else {
-          builtinAvatars[ch.id] = backendAvatar;
-          LS.set('builtinAvatars', builtinAvatars);
-        }
-        renderCharContent();
-      }
-    }).catch(() => {});
-  }
-
-  return localAvatar;
-}
 
 // 获取NPC头像（通讯录NPC，按名字索引）- 后端优先，本地兜底
 function getNPCAvatar(npc){
