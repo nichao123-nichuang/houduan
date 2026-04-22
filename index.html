@@ -1539,7 +1539,7 @@ async function renderScripts(){
     return `
     <div class="card script-card" onclick="startGame('${s.id}')">
       <div class="cover" style="position:relative;">${scriptCoverHtml(s)}
-        ${s._fromBackend ? '' : `<div class="cover-change-btn" onclick="event.stopPropagation();changeScriptCover('${s.id}')" title="更换封面">📷</div>`}
+        <div class="cover-change-btn" onclick="event.stopPropagation();changeScriptCover('${s.id}')" title="更换封面">📷</div>
       </div>
       <div class="info">
         <h4>${esc(s.title)}</h4>
