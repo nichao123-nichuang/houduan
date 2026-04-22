@@ -1628,9 +1628,50 @@ async function removeScriptCover(scriptId){
 
 // 创建/编辑剧本
 let _generatedAttrConfig = null;
+let _currentEditId = null;
+
+// 单独保存封面（不保存整个剧本）
+async function saveCoverOnly() {
+  const editId = _currentEditId;
+  if (!editId) { toast('请先保存剧本'); return; }
+  
+  const btn = document.getElementById('btnSaveCover');
+  if (btn) { btn.disabled = true; btn.textContent = '保存中...'; }
+  
+  try {
+    if (window._pendingScriptCover) {
+      await saveAvatar('script', editId, window._pendingScriptCover, 'scriptCovers');
+      scriptCovers[editId] = window._pendingScriptCover;
+      LS.set('scriptCovers', scriptCovers);
+      window._pendingScriptCover = null;
+      toast('✅ 封面已保存');
+    } else {
+      // 检查是否切换到emoji
+      const emoji = gv('ms_cover').trim() || '📖';
+      if (scriptCovers[editId]) {
+        delete scriptCovers[editId];
+        LS.set('scriptCovers', scriptCovers);
+      }
+      // 更新剧本的emoji
+      const idx = customScripts.findIndex(s => s.id === editId);
+      if (idx >= 0) {
+        customScripts[idx].cover = emoji;
+        customScripts[idx].coverIsImg = false;
+        LS.set('customScripts', customScripts);
+      }
+      toast('✅ 封面已切换为emoji');
+    }
+    renderScripts();
+  } catch (e) {
+    toast('保存失败: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '💾 单独保存封面'; }
+  }
+}
 
 function showCreateScript(editId){
   window._pendingScriptCover = null;
+  _currentEditId = editId || null;
   const existing = editId ? customScripts.find(s=>s.id===editId) : null;
   // 编辑模式下，若原来有图片封面或自定义封面，先填入pending
   if(existing){
@@ -1666,11 +1707,12 @@ function showCreateScript(editId){
           </div>
           <input type="file" id="scriptCoverInput" accept="image/*" style="display:none;" onchange="onImgUpload(this,'scriptCoverPreview','rect','_pendingScriptCover')">
           <div style="flex:1;">
-            <div style="font-size:0.78rem;color:var(--text2);margin-bottom:6px;">点击封面可上传图片</div>
+            <div style="font-size:0.78rem;color:var(--text2);margin-bottom:6px;">点击封面上传图片</div>
             <div style="display:flex;align-items:center;gap:6px;">
               <span style="font-size:0.75rem;color:var(--text3);">无图emoji：</span>
               <input class="input" id="ms_cover" value="${existing&&!existing.coverIsImg?esc(existing.cover||''):'📖'}" placeholder="📖" maxlength="4" style="width:60px;padding:6px 8px;">
             </div>
+            ${existing?'<button class="btn btn-sm" onclick="saveCoverOnly()" id="btnSaveCover" style="margin-top:8px;font-size:0.72rem;padding:4px 10px;">💾 单独保存封面</button>':''}
           </div>
         </div>
       </div>
