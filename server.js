@@ -145,7 +145,7 @@ app.use(express.static(staticPath, {
 
 // 根路径重定向到游戏页面
 app.get('/', (req, res) => {
-  res.redirect('/nichuang.html');
+  res.redirect('/index.html');
 });
 
 // ============================================================
