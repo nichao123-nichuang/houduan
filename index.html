@@ -1288,6 +1288,9 @@ function init(){
       refreshAllAvatars();
     }
   });
+
+  // 页面首次加载时也预加载后端头像（解决首次加载时visibilitychange不触发的问题）
+  refreshAllAvatars();
 }
 
 // 刷新所有头像（从后端拉取最新数据）
