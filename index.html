@@ -569,6 +569,7 @@ textarea.input{resize:vertical;min-height:80px;line-height:1.5;}
 <body>
 <canvas id="bg-canvas"></canvas>
 <div class="app-wrap" id="app">
+  <input type="file" id="_scriptCoverHiddenInput" accept="image/*" style="display:none;" onchange="onScriptCoverChange(this)">
 
   <!-- 顶部栏 -->
   <div class="top-bar">
@@ -1560,70 +1561,31 @@ async function renderScripts(){
 
 // 更换内置剧本封面
 function changeScriptCover(scriptId){
-  const script = getScriptById(scriptId);
-  if(!script) return;
-  const hasCustom = !!scriptCovers[scriptId];
-  const coverInfo = getScriptCover(script);
-  
-  showModal('📷 更换封面 - ' + script.title, `
-    <div style="display:flex;flex-direction:column;gap:14px;">
-      <div style="display:flex;align-items:center;gap:14px;">
-        <div class="cover-upload-preview" id="scriptCoverChangePreview" onclick="document.getElementById('scriptCoverChangeInput').click()" title="点击上传新封面" style="width:80px;height:108px;">
-          ${coverInfo.type==='img'?`<img src="${esc(coverInfo.value)}" alt="封面">`:`<span>${coverInfo.value}</span>`}
-          <div class="upload-hint">点击上传</div>
-        </div>
-        <input type="file" id="scriptCoverChangeInput" accept="image/*" style="display:none;" onchange="onScriptCoverChange(this)">
-        <div style="flex:1;">
-          <div style="font-size:0.85rem;margin-bottom:8px;">点击左侧封面可上传新图片</div>
-          <div style="font-size:0.75rem;color:var(--text3);line-height:1.5;">支持 JPG/PNG/WebP，建议比例 3:4<br>图片将保存在本地，不会上传服务器</div>
-          ${hasCustom?`<button class="btn btn-sm btn-danger" style="margin-top:8px;" onclick="removeScriptCover('${scriptId}')">🗑 恢复默认封面</button>`:''}
-        </div>
-      </div>
-    </div>
-  `, async ()=>{
-    // 确认：如果预览区有新图片，保存
-    const preview = document.getElementById('scriptCoverChangePreview');
-    const img = preview?.querySelector('img');
-    if(img && img.src && img.src.startsWith('data:')){
-      // 保存到后端 + 本地
-      await saveAvatar('script', scriptId, img.src, 'scriptCovers');
-      scriptCovers[scriptId] = img.src;
-      LS.set('scriptCovers', scriptCovers);
-      renderScripts();
-      toast('封面已更新');
-    }
-  }, true);
+  // 触发隐藏的文件选择器
+  const input = document.getElementById('_scriptCoverHiddenInput');
+  if(!input) return;
+  window._changingCoverId = scriptId;
+  input.click();
 }
 
-function onScriptCoverChange(input){
+// 隐藏的file input，触发后保存后端 + 本地（跟头像逻辑一致）
+async function onScriptCoverChange(input){
+  const scriptId = window._changingCoverId;
+  window._changingCoverId = null;
+  if(!scriptId) return;
+
   const file = input.files[0];
   if(!file) return;
   if(file.size > 5*1024*1024){toast('图片不能超过5MB');return;}
+
   const reader = new FileReader();
-  reader.onload = function(e){
+  reader.onload = async function(e){
     const base64 = e.target.result;
-    const preview = document.getElementById('scriptCoverChangePreview');
-    if(!preview) return;
-    const emojiSpan = preview.querySelector('span');
-    if(emojiSpan) emojiSpan.style.display = 'none';
-    const hint = preview.querySelector('.upload-hint');
-    if(hint) hint.style.display = 'none';
-    let img = preview.querySelector('img');
-    if(!img){img = document.createElement('img');preview.appendChild(img);}
-    img.src = base64;
-    img.style.cssText = 'width:100%;height:100%;object-fit:cover;';
+    await saveAvatar('script', scriptId, base64, 'scriptCovers');
+    toast('✅ 封面已更新');
   };
   reader.readAsDataURL(file);
-}
-
-async function removeScriptCover(scriptId){
-  // 删除后端数据
-  await deleteAvatar('script', scriptId, 'scriptCovers');
-  delete scriptCovers[scriptId];
-  LS.set('scriptCovers', scriptCovers);
-  closeModal();
-  renderScripts();
-  toast('已恢复默认封面');
+  input.value = '';
 }
 
 // 创建/编辑剧本
