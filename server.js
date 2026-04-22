@@ -330,9 +330,9 @@ app.get('/api/health', async (req, res) => {
 // ============================================================
 
 // 判断头像类型是否需要用户隔离
-// NPC头像和剧本封面是公共的（所有用户共享），角色头像是个人化的
+// NPC头像、剧本封面、角色头像都是公共的（所有用户共享）
 function needsUserIsolation(avatarType) {
-  return avatarType === 'character'; // 只有角色头像需要按用户隔离
+  return false; // 全部改成公共存储
 }
 
 // 获取存储用的ownerId
