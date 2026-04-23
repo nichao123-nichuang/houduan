@@ -496,28 +496,28 @@ app.post('/api/script', async (req, res) => {
     // 检查是否已存在剧本
     const existing = await pool.query(`SELECT status FROM scripts WHERE id = $1`, [id]);
 
-    let status = 'pending';
-    let message = '剧本已提交审核';
+    let status = 'approved';  // 自动通过审核，无需等待
+    let message = '剧本已发布';
 
     if (existing.rows.length > 0) {
-      // 已存在的剧本，更新内容，状态重置为待审核
+      // 已存在的剧本，更新内容，保持已通过状态
       await pool.query(`
         UPDATE scripts SET
           title = $1, description = $2, tag = $3, start_msg = $4,
           quick_actions = $5, attr_config = $6, author_name = $7,
-          status = 'pending', updated_at = EXTRACT(EPOCH FROM NOW())::BIGINT
+          status = 'approved', updated_at = EXTRACT(EPOCH FROM NOW())::BIGINT
         WHERE id = $8
       `, [title, description, tag, startMsg, JSON.stringify(quickActions), JSON.stringify(attrConfig), author, id]);
-      message = '剧本已更新，重新提交审核';
+      message = '剧本已更新';
     } else {
-      // 新剧本，插入数据库
+      // 新剧本，插入数据库（自动通过审核）
       await pool.query(`
         INSERT INTO scripts (id, title, description, tag, start_msg, quick_actions, attr_config, author_id, author_name, status)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending')
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'approved')
       `, [id, title, description, tag, startMsg, JSON.stringify(quickActions), JSON.stringify(attrConfig), authorId, author]);
     }
 
-    res.json({ success: true, message, status: 'pending' });
+    res.json({ success: true, message, status: 'approved' });
   } catch (e) {
     console.error('保存剧本失败:', e.message);
     res.status(500).json({ error: '保存失败: ' + e.message });
@@ -619,15 +619,26 @@ app.delete('/api/script/:id', async (req, res) => {
 //  剧本审核 API（管理员）
 // ============================================================
 
-// 获取待审核剧本列表
-app.get('/api/admin/scripts/pending', async (req, res) => {
-  const userId = getUserId(req);
+// 获取所有剧本列表（管理员用）
+app.get('/api/admin/scripts/all', requireAdmin, async (req, res) => {
+  try {
+    if (!pool) {
+      return res.status(503).json({ error: '数据库未连接' });
+    }
 
-  // 简单权限检查（实际应使用更严格的认证）
-  if (userId !== 'admin' && userId !== 'nichuang_admin') {
-    return res.status(403).json({ error: '无审核权限' });
+    const result = await pool.query(`
+      SELECT * FROM scripts ORDER BY created_at DESC
+    `);
+
+    res.json({ success: true, scripts: result.rows });
+  } catch (e) {
+    console.error('获取剧本列表失败:', e.message);
+    res.status(500).json({ error: '获取失败: ' + e.message });
   }
+});
 
+// 获取待审核剧本列表
+app.get('/api/admin/scripts/pending', requireAdmin, async (req, res) => {
   try {
     if (!pool) {
       return res.status(503).json({ error: '数据库未连接' });
@@ -644,18 +655,13 @@ app.get('/api/admin/scripts/pending', async (req, res) => {
   }
 });
 
-// 审核剧本（通过/拒绝）
-app.post('/api/admin/script/review', async (req, res) => {
-  const { id, action, reviewNote } = req.body;  // action: 'approve' | 'reject'
-  const userId = getUserId(req);
-  const userName = getUserName(req);
+// 审核剧本（通过/拒绝/删除）
+app.post('/api/admin/script/review', requireAdmin, async (req, res) => {
+  const { id, action, reviewNote } = req.body;  // action: 'approve' | 'reject' | 'delete'
+  const userId = req.headers['x-admin-token'] || 'admin';
+  const userName = '管理员';
 
-  // 权限检查
-  if (userId !== 'admin' && userId !== 'nichuang_admin') {
-    return res.status(403).json({ error: '无审核权限' });
-  }
-
-  if (!id || !action || !['approve', 'reject'].includes(action)) {
+  if (!id || !action || !['approve', 'reject', 'delete'].includes(action)) {
     return res.status(400).json({ error: '缺少必要参数' });
   }
 
@@ -664,15 +670,19 @@ app.post('/api/admin/script/review', async (req, res) => {
       return res.status(503).json({ error: '数据库未连接' });
     }
 
-    const status = action === 'approve' ? 'approved' : 'rejected';
-
-    await pool.query(`
-      UPDATE scripts SET
-        status = $1, reviewer_id = $2, reviewer_name = $3, review_note = $4, updated_at = EXTRACT(EPOCH FROM NOW())::BIGINT
-      WHERE id = $5
-    `, [status, userId, userName, reviewNote || '', id]);
-
-    res.json({ success: true, message: action === 'approve' ? '剧本已通过审核' : '剧本已拒绝', status });
+    if (action === 'delete') {
+      // 删除剧本
+      await pool.query(`DELETE FROM scripts WHERE id = $1`, [id]);
+      res.json({ success: true, message: '剧本已删除' });
+    } else {
+      const status = action === 'approve' ? 'approved' : 'rejected';
+      await pool.query(`
+        UPDATE scripts SET
+          status = $1, reviewer_id = $2, reviewer_name = $3, review_note = $4, updated_at = EXTRACT(EPOCH FROM NOW())::BIGINT
+        WHERE id = $5
+      `, [status, userId, userName, reviewNote || '', id]);
+      res.json({ success: true, message: action === 'approve' ? '剧本已通过审核' : '剧本已拒绝', status });
+    }
   } catch (e) {
     console.error('审核剧本失败:', e.message);
     res.status(500).json({ error: '审核失败: ' + e.message });
