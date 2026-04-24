@@ -496,28 +496,29 @@ app.post('/api/script', async (req, res) => {
     // 检查是否已存在剧本
     const existing = await pool.query(`SELECT status FROM scripts WHERE id = $1`, [id]);
 
-    let status = 'approved';  // 自动通过审核，无需等待
-    let message = '剧本已发布';
+    let status = 'pending';  // 新剧本需要审核
+    let message = '剧本已提交审核';
 
     if (existing.rows.length > 0) {
-      // 已存在的剧本，更新内容，保持已通过状态
+      // 已存在的剧本，更新内容，保持已通过状态（编辑不重新审核）
       await pool.query(`
         UPDATE scripts SET
           title = $1, description = $2, tag = $3, start_msg = $4,
           quick_actions = $5, attr_config = $6, author_name = $7,
-          status = 'approved', updated_at = EXTRACT(EPOCH FROM NOW())::BIGINT
+          updated_at = EXTRACT(EPOCH FROM NOW())::BIGINT
         WHERE id = $8
       `, [title, description, tag, startMsg, JSON.stringify(quickActions), JSON.stringify(attrConfig), author, id]);
+      status = existing.rows[0].status;  // 保持原状态
       message = '剧本已更新';
     } else {
-      // 新剧本，插入数据库（自动通过审核）
+      // 新剧本，插入数据库（待审核状态）
       await pool.query(`
         INSERT INTO scripts (id, title, description, tag, start_msg, quick_actions, attr_config, author_id, author_name, status)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'approved')
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending')
       `, [id, title, description, tag, startMsg, JSON.stringify(quickActions), JSON.stringify(attrConfig), authorId, author]);
     }
 
-    res.json({ success: true, message, status: 'approved' });
+    res.json({ success: true, message, status });
   } catch (e) {
     console.error('保存剧本失败:', e.message);
     res.status(500).json({ error: '保存失败: ' + e.message });
