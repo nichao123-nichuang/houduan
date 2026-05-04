@@ -36,6 +36,9 @@ const fs = require('fs');
 const path = require('path');
 const { Pool } = require('pg');
 
+// 签到系统模块
+const checkinSystem = require('./checkin-system');
+
 const app = express();
 const PORT = process.env.PORT || 3210;
 
@@ -108,6 +111,9 @@ async function initDatabase() {
       )
     `);
     console.log('✅ 剧本表初始化完成');
+
+    // 初始化签到系统数据表
+    await checkinSystem.initCheckinTable(pool);
 
     return true;
   } catch (e) {
@@ -735,6 +741,30 @@ app.post('/api/script/:id/play', async (req, res) => {
     console.error('更新游玩次数失败:', e.message);
     res.status(500).json({ error: '更新失败: ' + e.message });
   }
+});
+
+// ============================================================
+//  签到系统 API
+// ============================================================
+
+// 1. 执行签到
+app.post('/api/checkin', async (req, res) => {
+  const userId = checkinSystem.getUserId(req);
+  const result = await checkinSystem.doCheckin(pool, userId, HARD_CONFIG);
+  res.json(result);
+});
+
+// 2. 获取签到状态
+app.get('/api/checkin/status', async (req, res) => {
+  const userId = checkinSystem.getUserId(req);
+  const result = await checkinSystem.getCheckinStatus(pool, userId);
+  res.json(result);
+});
+
+// 3. 获取签到配置
+app.get('/api/checkin/config', (req, res) => {
+  const result = checkinSystem.getCheckinConfig();
+  res.json(result);
 });
 
 // ============================================================
